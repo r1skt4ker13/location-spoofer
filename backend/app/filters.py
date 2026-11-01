@@ -2,6 +2,7 @@
 Deterministic eligibility filters, applied before any Claude call.
 
 Location: Bay Area, NYC metro (incl. all of New Jersey), or remote.
+GPA/transcript: drop postings whose text mentions either.
 Degree: drop titles that signal MS/PhD-only or research roles. Claude's scoring
 call does a second, fuller degree check against the qualifications text.
 """
@@ -69,10 +70,20 @@ def degree_title_ok(title: str | None) -> bool:
     return not (title and _TITLE_BLOCK_RE.search(title))
 
 
+_GPA_TRANSCRIPT_RE = re.compile(r"\bgpa\b|grade point average|\btranscripts?\b", re.I)
+
+
+def gpa_transcript_ok(job: dict) -> bool:
+    text = " ".join(job.get(k) or "" for k in ("title", "qualifications"))
+    return not _GPA_TRANSCRIPT_RE.search(text)
+
+
 def filter_reason(job: dict) -> str | None:
     """Return why a job is ineligible, or None if it passes."""
     if not degree_title_ok(job.get("title")):
         return "title indicates research or MS/PhD/MBA role"
     if not location_ok(job.get("location"), job.get("work_model")):
         return f"location not Bay Area / NYC-NJ / remote: {job.get('location') or 'unknown'}"
+    if not gpa_transcript_ok(job):
+        return "asks for GPA or transcript"
     return None

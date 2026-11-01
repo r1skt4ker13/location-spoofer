@@ -56,7 +56,7 @@
 
 <div class="toolbar">
   <div class="tabs" id="tabs">
-    <button data-status="drafted" class="active">Ready to apply</button>
+    <button data-status="ready" class="active">Ready to apply</button>
     <button data-status="scored">Scored</button>
     <button data-status="applied">Applied</button>
     <button data-status="skipped">Skipped</button>
@@ -74,7 +74,7 @@
 </main>
 
 <script>
-const state = { status: "drafted", jobs: [], selectedId: null, wasRunning: false };
+const state = { status: "ready", jobs: [], selectedId: null, wasRunning: false };
 
 function el(tag, props = {}, ...children) {
   const node = document.createElement(tag);
@@ -146,22 +146,12 @@ async function setStatus(job, status) {
   await refresh();
 }
 
-async function draft(job, btn) {
-  btn.disabled = true; btn.textContent = "Drafting…";
-  try {
-    const updated = await api(`/api/jobs/${job.id}/draft`, { method: "POST" });
-    await loadJobs();
-    renderDetail(updated);
-  } catch (e) { alert("Draft failed: " + e.message); btn.disabled = false; btn.textContent = "Retry draft"; }
-}
-
 function renderDetail(j) {
   const d = document.getElementById("detail");
   d.replaceChildren();
   if (!j) { d.append(el("div", { class: "empty" }, "Select a job")); return; }
 
   const url = safeUrl(j.apply_url);
-  const draftBtn = el("button", { onclick: (e) => draft(j, e.target) }, j.cover_letter ? "Regenerate draft" : "Generate draft");
 
   d.append(
     el("h2", {}, j.title),
@@ -170,7 +160,7 @@ function renderDetail(j) {
       url ? el("a", { href: url, target: "_blank", rel: "noopener noreferrer" }, el("button", { class: "primary" }, "Open application")) : null,
       j.status !== "applied" ? el("button", { onclick: () => setStatus(j, "applied") }, "Mark applied") : null,
       j.status !== "skipped" ? el("button", { onclick: () => setStatus(j, "skipped") }, "Skip") : null,
-      draftBtn,
+      el("a", { href: "/api/resume", target: "_blank" }, el("button", {}, "Open my resume")),
     ),
     j.filter_reason ? el("div", { class: "meta" }, `Filtered out: ${j.filter_reason}`) : null,
     el("h3", {}, `Fit score: ${j.fit_score ?? "not scored"}`),
@@ -184,20 +174,6 @@ function renderDetail(j) {
     el("div", {}, j.qualifications || "—"),
   );
 
-  if (Array.isArray(j.resume_bullets) && j.resume_bullets.length) {
-    d.append(
-      el("h3", {}, "Tailored resume bullets"),
-      el("ul", { class: "bullets" }, ...j.resume_bullets.map(b => el("li", {}, b))),
-      el("div", { class: "actions" }, copyBtn("Copy bullets", j.resume_bullets.map(b => "• " + b).join("\n"))),
-    );
-  }
-  if (j.cover_letter) {
-    d.append(
-      el("h3", {}, "Cover letter"),
-      el("pre", {}, j.cover_letter),
-      el("div", { class: "actions" }, copyBtn("Copy cover letter", j.cover_letter)),
-    );
-  }
 }
 
 async function loadStatus() {
@@ -206,14 +182,14 @@ async function loadStatus() {
   const btn = document.getElementById("runBtn");
   btn.disabled = lr.running;
   btn.textContent = lr.running ? "Running…" : "Run now";
-  let text = `Auto-runs every ${s.interval_hours}h · drafts at score ≥ ${s.fit_threshold}`;
+  let text = `Auto-runs every ${s.interval_hours}h · ready at score ≥ ${s.fit_threshold}`;
   if (lr.running) text = "Scraping and scoring… " + text;
   else if (lr.error) text = `Last run failed: ${lr.error} · ` + text;
   else if (lr.finished_at) text = `Last run ${new Date(lr.finished_at).toLocaleString()} (${lr.result?.new ?? 0} new, ${lr.result?.filtered ?? 0} filtered) · ` + text;
   document.getElementById("runMeta").textContent = text;
   const c = s.counts;
   document.getElementById("counts").textContent =
-    `${c.drafted || 0} ready · ${c.scored || 0} scored · ${c.applied || 0} applied · ${c.filtered || 0} filtered · ${c.new || 0} pending`;
+    `${c.ready || 0} ready · ${c.scored || 0} scored · ${c.applied || 0} applied · ${c.filtered || 0} filtered · ${c.new || 0} pending`;
   const sel = document.getElementById("category");
   if (sel.options.length === 1) for (const cat of s.categories || []) sel.append(el("option", { value: cat }, cat));
   if (state.wasRunning && !lr.running) loadJobs();

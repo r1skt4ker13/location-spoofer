@@ -50,6 +50,8 @@ def init_db():
             if col not in existing:
                 conn.execute(ddl)
         # Rows from before multi-source all came from the ML/AI Airtable view.
+        # 'drafted' was renamed to 'ready' when tailored drafting was removed.
+        conn.execute("UPDATE jobs SET status = 'ready' WHERE status = 'drafted'")
         conn.execute("UPDATE jobs SET category = 'Machine Learning & AI' WHERE category IS NULL")
 
 

@@ -20,8 +20,8 @@ scheduler = BackgroundScheduler()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    # Re-check jobs scored before the location/degree filters existed.
-    apply_filters(("new", "scored", "drafted"))
+    # Re-check already-scored jobs against the current filters.
+    apply_filters(("new", "scored", "ready"))
     # Background thread: Playwright's sync API can't run on the asyncio loop.
     scheduler.add_job(run_pipeline, "interval", hours=SCRAPE_INTERVAL_HOURS, id="pipeline",
                       max_instances=1, next_run_time=datetime.now())

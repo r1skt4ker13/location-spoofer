@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A local job-search assistant. It scrapes intern-list.com, filters postings by category, location and degree level, scores the survivors against `resume/resume.pdf` with Claude, and drafts resume bullets plus a cover letter for strong matches. It does **not** submit applications. The user applies by hand from the dashboard and marks each job applied or skipped.
+A local job-search assistant. It scrapes intern-list.com, filters postings by category, location, degree level, GPA/transcript requirements and duplicates, then scores the survivors against `resume/resume.pdf` with Claude. There is no per-job tailoring: the same resume is used for every application, served at `/api/resume`. It does **not** submit applications. The user applies by hand from the dashboard and marks each job applied or skipped.
 
 ## Commands
 
@@ -27,19 +27,19 @@ There is no test suite, linter or build step. The filters in `app/filters.py` ar
   - It serves `frontend/index.html`, a single-file vanilla-JS dashboard.
 - **`app/pipeline.py`:** `run_pipeline()` holds a non-blocking lock so the scheduler and the "Run now" button can't overlap. Each stage reads and writes job rows by `status`:
   - `new` → `filtered` (fails a filter, so no Claude call)
-  - or `new` → `scored` → `drafted`, when `fit_score >= FIT_THRESHOLD`
-  - The user then moves a drafted job to `applied` or `skipped`.
-  - Claude can also move a job to `filtered` while scoring, if it flags an MS/PhD requirement or a research role.
+  - or `new` → `ready` when `fit_score >= FIT_THRESHOLD`, otherwise `scored`
+  - The user then moves a ready job to `applied` or `skipped`.
+  - A new job with the same normalized company + title as an existing row is inserted as `filtered` ("duplicate of …"). Together with the id-based known-id check, this prevents re-applying.
+  - Claude can also move a job to `filtered` while scoring (see the flags below).
 - **Sources** (`SOURCES` in `app/config.py`, dispatched by `scraper.scrape_all`):
   - **`ml_ai`:** intern-list's ML/AI list is an embedded Airtable view that only fills in through JavaScript and only draws the rows on screen. `app/scraper.py` renders it in headless Chromium, scrolls, and collects rows by `data-rowid`. It maps columns by `data-columnindex` through `COLUMN_MAP`, which breaks if the Airtable view's columns are reordered. These job ids are the raw Airtable rowids, with no prefix.
   - **`pm`, `data_analysis`:** these lists are server-rendered Webflow pages, scraped by `app/webflow_scraper.py` with stdlib `urllib`. Cards (`div.w-dyn-item`) give the title, company and date. Location, qualifications and the apply link only appear on each job's detail page, which is fetched only for unseen ids. These job ids are `<source>:<numeric id>`.
   - Every source is sorted newest first. A scrape stops after 25 consecutive already-known ids.
-- **`app/filters.py`:** the deterministic filters. A location passes if it is in the Bay Area, the NYC metro (all of NJ counts) or remote. A title fails if it contains research, PhD, Master's or MBA keywords.
+- **`app/filters.py`:** the deterministic filters. A location passes if it is in the Bay Area, the NYC metro (all of NJ counts) or remote. A title fails if it contains research, PhD, Master's or MBA keywords. A title or qualifications text fails if it mentions GPA or transcript.
 - **`app/claude_client.py`:**
-  - Scoring calls `claude-haiku-5-5` and drafting calls `claude-sonnet-5-5`.
-  - Both force a tool call (`tool_choice`) to get structured output.
-  - The scoring tool also returns `requires_graduate_degree` and `is_research_role`.
-  - The drafting prompt must never invent experience that isn't in the resume.
-- **`app/db.py`:** SQLite at `data/jobs.db`. Add schema changes as idempotent `ALTER TABLE ... ADD COLUMN` statements in `_migrate()`, because existing databases must keep working.
+  - Scoring calls `claude-haiku-5-5`.
+  - It forces a tool call (`tool_choice`) to get structured output.
+  - The scoring tool also returns `requires_graduate_degree`, `is_research_role` and `asks_for_gpa_or_transcript`. Any of these being true moves the job to `filtered`.
+- **`app/db.py`:** SQLite at `data/jobs.db`. Add schema changes as idempotent `ALTER TABLE ... ADD COLUMN` entries in `MIGRATIONS` (applied by `init_db`), because existing databases must keep working.
 
 Config comes from `backend/.env` (see `.env.example`): `ANTHROPIC_API_KEY`, `SCRAPE_INTERVAL_HOURS`, `FIT_THRESHOLD`, `MAX_SCRAPE_ROWS`, `PORT`, `AIRTABLE_EMBED_URL`.

@@ -27,4 +27,3 @@ DB_PATH = BASE_DIR / "data" / "jobs.db"
 RESUME_PATH = BASE_DIR / "resume" / "resume.pdf"
 
 SCORING_MODEL = "claude-haiku-5-5"
-DRAFTING_MODEL = "claude-sonnet-5-5"

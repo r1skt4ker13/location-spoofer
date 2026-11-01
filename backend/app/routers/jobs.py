@@ -2,15 +2,16 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from app.config import FIT_THRESHOLD, SCRAPE_INTERVAL_HOURS, SOURCES
+from app.config import FIT_THRESHOLD, RESUME_PATH, SCRAPE_INTERVAL_HOURS, SOURCES
 from app.db import get_conn, row_to_dict
 from app import pipeline
 
 router = APIRouter(prefix="/api")
 
-Status = Literal["new", "scored", "drafted", "applied", "skipped", "filtered"]
+Status = Literal["new", "scored", "ready", "applied", "skipped", "filtered"]
 
 
 class StatusUpdate(BaseModel):
@@ -60,12 +61,12 @@ def update_status(job_id: str, body: StatusUpdate):
     return {"ok": True}
 
 
-@router.post("/jobs/{job_id}/draft")
-def draft_job(job_id: str):
-    draft = pipeline.redraft_job(job_id)
-    if draft is None:
-        raise HTTPException(404, "Job not found")
-    return get_job(job_id)
+@router.get("/resume")
+def resume_file():
+    """Your resume, the same file for every application."""
+    if not RESUME_PATH.exists():
+        raise HTTPException(404, "resume/resume.pdf not found")
+    return FileResponse(RESUME_PATH, media_type="application/pdf", filename=RESUME_PATH.name)
 
 
 @router.post("/run")
