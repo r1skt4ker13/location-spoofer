@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+data/*.db
+data/*.db-journal
+resume/*.pdf
+resume/*.docx
+node_modules/
+.DS_Store
+backend/probe_dump.html
+backend/probe.py
