@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A local Mac/Windows app that sets a USB- or Wi-Fi-connected iPhone's location to a point picked on a map, so Find My shows that point. It drives Apple's developer location-simulation service through [pymobiledevice3](https://github.com/doronz88/pymobiledevice3).
 
-The `main` branch holds an unrelated older project (a job-search agent). This app lives on `feature-location-spoofer`.
+This repo previously held an unrelated job-search agent; its final state is tagged `job-agent-final`.
 
 ## Commands
 
