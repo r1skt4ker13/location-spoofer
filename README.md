@@ -13,7 +13,7 @@ Go to the [Releases page](../../releases) and download:
 - **Windows:** `LocationSpoofer-windows.zip`. Unzip it and run `LocationSpoofer.exe`.
 
 The app is free and unsigned, so your computer will warn you the first time you open it:
-- **Mac:** right-click `LocationSpoofer.app`, choose **Open**, then click **Open** again. If macOS says the app "is damaged", run this once in Terminal:
+- **Mac:** double-click `LocationSpoofer.app`. When macOS blocks it, open **System Settings → Privacy & Security**, scroll down, click **Open Anyway** next to LocationSpoofer, and confirm. You only do this once. If macOS says the app "is damaged", run this once in Terminal instead:
   `xattr -dr com.apple.quarantine ~/Downloads/LocationSpoofer.app`
 - **Windows:** when SmartScreen appears, click **More info**, then **Run anyway**.
 

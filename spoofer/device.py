@@ -25,6 +25,7 @@ from pymobiledevice3.exceptions import (
     AlreadyMountedError,
     DeviceHasPasscodeSetError,
     DeviceNotFoundError,
+    MuxException,
     NoDeviceConnectedError,
     NotPairedError,
     PairingDialogResponsePendingError,
@@ -65,6 +66,8 @@ def _friendly(e: BaseException) -> SpooferError:
         return SpooferError("Unlock your iPhone (enter your passcode), then try again.")
     if isinstance(e, (NotPairedError, PairingError)):
         return SpooferError("This computer isn't trusted by the phone yet. Plug it in with a cable and tap \"Trust\".")
+    if isinstance(e, MuxException):
+        return SpooferError("Lost the connection to the phone. Plug it back in, or check it's on the same Wi-Fi, then try again.")
     return SpooferError(f"{type(e).__name__}: {e}" if str(e) else type(e).__name__)
 
 
