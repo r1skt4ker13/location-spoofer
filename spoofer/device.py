@@ -41,7 +41,9 @@ from pymobiledevice3.services.mobile_image_mounter import auto_mount
 
 logger = logging.getLogger("spoofer.device")
 
-KEEPALIVE_SECONDS = 20     # re-send the current point this often; also detects dropped connections
+KEEPALIVE_SECONDS = 10     # re-send the current point this often; also detects dropped connections
+CONNECT_TIMEOUT = 20       # opening the tunnel + location channel
+SEND_TIMEOUT = 10          # one location update
 WALK_TICK_SECONDS = 1.0    # how often a walk sends a new point
 EARTH_RADIUS_M = 6_371_000
 
@@ -101,7 +103,8 @@ class DeviceManager:
 
         self._stack: Optional[AsyncExitStack] = None
         self._sim: Optional[LocationSimulation] = None
-        self._serial: Optional[str] = None
+        self._serial: Optional[str] = None        # phone the open session talks to
+        self._target: Optional[str] = None        # phone we're spoofing; survives dropped sessions
         self._walk_task: Optional[asyncio.Task] = None
         self._keepalive_task: Optional[asyncio.Task] = None
 
@@ -213,13 +216,21 @@ class DeviceManager:
             return
         await self._close_session()
         stack = AsyncExitStack()
-        try:
+
+        async def connect() -> LocationSimulation:
             rsd = await stack.enter_async_context(UserspaceRsdTunnel(serial=serial))
             dvt = await stack.enter_async_context(DvtProvider(rsd))
-            self._sim = await stack.enter_async_context(LocationSimulation(dvt))
+            return await stack.enter_async_context(LocationSimulation(dvt))
+
+        try:
+            self._sim = await asyncio.wait_for(connect(), CONNECT_TIMEOUT)
         except BaseException:
-            await stack.aclose()
+            self._sim = None
+            with contextlib.suppress(Exception):
+                await stack.aclose()
             raise
+        types = {d.connection_type for d in await usbmux.list_devices() if d.serial == serial}
+        logger.info("session open to %s via %s", serial, "USB" if "USB" in types else "Wi-Fi")
         self._stack, self._serial = stack, serial
         self.state["connected_udid"] = serial
         if self._keepalive_task is None or self._keepalive_task.done():
@@ -234,28 +245,33 @@ class DeviceManager:
 
     async def _send(self, serial: str, lat: float, lon: float) -> None:
         """Set a point, reconnecting once if the connection dropped (e.g. Wi-Fi blip)."""
+        self._target = serial
         await self._open_session(serial)
         try:
-            await self._sim.set(lat, lon)
+            await asyncio.wait_for(self._sim.set(lat, lon), SEND_TIMEOUT)
         except Exception as e:
             logger.warning("send failed (%r); reconnecting", e)
             await self._close_session()
             await self._open_session(serial)
-            await self._sim.set(lat, lon)
+            await asyncio.wait_for(self._sim.set(lat, lon), SEND_TIMEOUT)
         self.state["location"] = [lat, lon]
         self.state["error"] = None
 
     async def _keepalive(self) -> None:
         while True:
             await asyncio.sleep(KEEPALIVE_SECONDS)
-            loc, serial = self.state["location"], self._serial
+            loc, serial = self.state["location"], self._target
             if self.state["mode"] != "static" or loc is None or serial is None:
                 continue
+            had_error = bool(self.state["error"])
             try:
                 await self._send(serial, *loc)
+                if had_error:
+                    logger.info("reconnected")
             except Exception as e:
+                # Keep retrying every tick: the phone may just be asleep or briefly off Wi-Fi.
                 logger.warning("keepalive failed: %r", e)
-                self.state["error"] = str(_friendly(e))
+                self.state["error"] = "Lost connection to the phone, retrying… (" + str(_friendly(e)) + ")"
 
     async def _stop_walk(self) -> None:
         task, self._walk_task = self._walk_task, None
@@ -303,4 +319,5 @@ class DeviceManager:
             with contextlib.suppress(Exception):
                 await self._sim.clear()
         await self._close_session()
+        self._target = None
         self.state.update(location=None, mode="off", error=None)
