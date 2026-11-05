@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Location Spoofer</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #16181d; --muted: #646b78; --border: #dfe2e8;
+    --accent: #2f6fed; --accent-text: #ffffff; --ok: #1f8a4c; --warn: #b26a00; --bad: #c4372f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111317; --panel: #1a1d23; --text: #e8eaee; --muted: #9aa1ad; --border: #2c3038;
+            --accent: #5b8cff; --accent-text: #0b0d10; --ok: #47c27f; --warn: #e2a33a; --bad: #ff6b61; }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         display: grid; grid-template-columns: 340px 1fr; }
+  aside { background: var(--panel); border-right: 1px solid var(--border); padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
+  #map { height: 100%; }
+  h1 { font-size: 18px; margin: 0; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; }
+  section { border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+  button { font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  input, select { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); width: 100%; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .badge { font-size: 11px; padding: 2px 6px; border-radius: 6px; border: 1px solid var(--border); }
+  .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+  ul.results, ul.favs { list-style: none; padding: 0; margin: 8px 0 0; }
+  ul.results li, ul.favs li { padding: 6px 4px; border-bottom: 1px solid var(--border); cursor: pointer; display: flex; justify-content: space-between; gap: 8px; }
+  ul.results li:hover, ul.favs li:hover { color: var(--accent); }
+  #status { font-weight: 600; }
+  #msg { white-space: pre-wrap; }
+  @media (max-width: 760px) {
+    body { grid-template-columns: 1fr; grid-template-rows: auto 55vh; }
+    aside { border-right: 0; border-bottom: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+<aside>
+  <div class="row" style="justify-content:space-between;flex-wrap:nowrap">
+    <div>
+      <h1>Location Spoofer</h1>
+      <div class="muted">Keep this app running while spoofing. Quitting restores your real location.</div>
+    </div>
+    <button id="quit" title="Restore real location and quit">Quit</button>
+  </div>
+
+  <section>
+    <h2>Phone</h2>
+    <div class="row">
+      <select id="device"><option value="">Looking for phones…</option></select>
+      <button id="refresh" title="Refresh">↻</button>
+    </div>
+    <div id="deviceInfo" class="muted" style="margin-top:8px"></div>
+    <div class="row" style="margin-top:8px"><button id="prepare">Prepare phone</button></div>
+  </section>
+
+  <section>
+    <h2>Status</h2>
+    <div id="status">Not spoofing</div>
+    <div id="msg" class="muted"></div>
+  </section>
+
+  <section>
+    <h2>Go to</h2>
+    <input id="search" placeholder="Search an address or place…" />
+    <ul class="results" id="results"></ul>
+    <div class="muted" style="margin-top:8px">…or click anywhere on the map to drop a pin.</div>
+    <div id="pinInfo" class="muted"></div>
+    <div class="row" style="margin-top:8px">
+      <button class="primary" id="teleport" disabled>Teleport</button>
+      <button id="walk" disabled>Move here</button>
+      <select id="speed" style="width:auto">
+        <option value="1.4">Walking</option>
+        <option value="4.5">Cycling</option>
+        <option value="13">Driving</option>
+      </select>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button id="stop">Stop spoofing</button>
+      <button id="fav" disabled>☆ Save pin</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Saved places</h2>
+    <ul class="favs" id="favs"></ul>
+  </section>
+
+  <div class="muted">Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors. Search by Nominatim.</div>
+</aside>
+<div id="map"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const state = { pin: null, devices: [], status: null };
+
+const map = L.map("map").setView([37.7749, -122.4194], 12);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+}).addTo(map);
+const pinMarker = L.marker([0, 0], { opacity: 0.8 });
+const spoofMarker = L.circleMarker([0, 0], { radius: 9, color: "#2f6fed", fillColor: "#2f6fed", fillOpacity: 0.9 });
+
+async function api(path, body) {
+  const res = await fetch(path, body === undefined ? {} : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail ? (typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail)) : res.statusText);
+  return data;
+}
+
+function say(text, cls = "muted") { const m = $("msg"); m.textContent = text || ""; m.className = cls; }
+function udid() { return $("device").value; }
+
+async function busy(btn, label, fn) {
+  const old = btn.textContent; btn.disabled = true; btn.textContent = label;
+  try { await fn(); } catch (e) { say(e.message, "bad"); } finally { btn.textContent = old; btn.disabled = false; updateButtons(); }
+}
+
+// --- devices ---
+async function loadDevices() {
+  try {
+    state.devices = await api("/api/devices");
+  } catch (e) { say(e.message, "bad"); state.devices = []; }
+  const sel = $("device"), prev = sel.value;
+  sel.replaceChildren();
+  if (!state.devices.length) {
+    sel.append(new Option("No phone found: plug it in", ""));
+  } else {
+    for (const d of state.devices) sel.append(new Option(`${d.name || "iPhone"} · iOS ${d.ios || "?"} · ${d.connection}`, d.udid));
+    if (state.devices.some(d => d.udid === prev)) sel.value = prev;
+  }
+  renderDeviceInfo(); updateButtons();
+}
+
+function renderDeviceInfo() {
+  const d = state.devices.find(x => x.udid === udid());
+  const box = $("deviceInfo");
+  if (!d) { box.textContent = "Plug your iPhone in with a cable the first time. After setup, Wi-Fi works."; return; }
+  const item = (ok, label) => `<span class="${ok === true ? "ok" : ok === false ? "warn" : "muted"}">${ok === true ? "✓" : ok === false ? "•" : "?"} ${label}</span>`;
+  box.innerHTML = [
+    item(d.trusted, "Trusted"), item(d.developer_mode, "Developer Mode"), item(d.wifi_enabled, "Wi-Fi ready"),
+  ].join("&nbsp;&nbsp; ");
+}
+
+// --- pin / search ---
+function setPin(lat, lon, label) {
+  state.pin = { lat, lon, label: label || `${lat.toFixed(5)}, ${lon.toFixed(5)}` };
+  pinMarker.setLatLng([lat, lon]).addTo(map);
+  $("pinInfo").textContent = "Pin: " + state.pin.label;
+  updateButtons();
+}
+map.on("click", (e) => setPin(e.latlng.lat, e.latlng.lng));
+
+let searchTimer = null, lastSearch = 0;
+$("search").addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  const q = $("search").value.trim();
+  if (q.length < 3) { $("results").replaceChildren(); return; }
+  // Nominatim's usage policy allows at most 1 request per second.
+  const wait = Math.max(600, 1100 - (Date.now() - lastSearch));
+  searchTimer = setTimeout(() => search(q), wait);
+});
+async function search(q) {
+  lastSearch = Date.now();
+  try {
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&q=${encodeURIComponent(q)}`);
+    const items = await res.json();
+    const ul = $("results"); ul.replaceChildren();
+    for (const it of items) {
+      const li = document.createElement("li");
+      li.textContent = it.display_name;
+      li.onclick = () => {
+        const lat = +it.lat, lon = +it.lon;
+        setPin(lat, lon, it.display_name); map.setView([lat, lon], 16); ul.replaceChildren();
+      };
+      ul.append(li);
+    }
+  } catch { say("Search failed. Check your internet connection.", "bad"); }
+}
+
+// --- favorites (this browser only) ---
+function loadFavs() { try { return JSON.parse(localStorage.getItem("favs") || "[]"); } catch { return []; } }
+function saveFavs(f) { try { localStorage.setItem("favs", JSON.stringify(f)); } catch {} }
+function renderFavs() {
+  const ul = $("favs"); ul.replaceChildren();
+  const favs = loadFavs();
+  if (!favs.length) { const li = document.createElement("li"); li.className = "muted"; li.textContent = "None yet"; ul.append(li); return; }
+  favs.forEach((f, i) => {
+    const li = document.createElement("li");
+    const name = document.createElement("span"); name.textContent = f.label;
+    const del = document.createElement("span"); del.textContent = "✕"; del.className = "muted";
+    del.onclick = (e) => { e.stopPropagation(); const all = loadFavs(); all.splice(i, 1); saveFavs(all); renderFavs(); };
+    li.onclick = () => { setPin(f.lat, f.lon, f.label); map.setView([f.lat, f.lon], 15); };
+    li.append(name, del); ul.append(li);
+  });
+}
+$("fav").onclick = () => {
+  if (!state.pin) return;
+  const label = prompt("Name this place:", state.pin.label.split(",")[0]);
+  if (!label) return;
+  saveFavs([...loadFavs(), { ...state.pin, label }]); renderFavs();
+};
+
+// --- actions ---
+function updateButtons() {
+  const hasDevice = !!udid(), hasPin = !!state.pin;
+  $("teleport").disabled = !(hasDevice && hasPin);
+  $("walk").disabled = !(hasDevice && hasPin && state.status?.location);
+  $("fav").disabled = !hasPin;
+  $("prepare").disabled = !hasDevice;
+}
+
+$("prepare").onclick = () => busy($("prepare"), "Preparing… (first time can take a few minutes)", async () => {
+  say("Working… unlock your phone and watch for prompts.");
+  const r = await api("/api/prepare", { udid: udid() });
+  say([...r.steps.map(s => "✓ " + s), r.next ? "\nNext: " + r.next : "\nAll set! Pick a spot and Teleport."].join("\n"), r.done ? "ok" : "warn");
+  await loadDevices();
+});
+
+$("teleport").onclick = () => busy($("teleport"), "Teleporting…", async () => {
+  await api("/api/location", { udid: udid(), lat: state.pin.lat, lon: state.pin.lon });
+  say("Location set. Find My may take a minute to update for others.", "ok");
+  await pollStatus();
+});
+
+$("walk").onclick = () => busy($("walk"), "Starting…", async () => {
+  const from = state.status.location;
+  await api("/api/walk", { udid: udid(), speed: +$("speed").value,
+    points: [{ lat: from[0], lon: from[1] }, { lat: state.pin.lat, lon: state.pin.lon }] });
+  say("Moving…", "ok");
+  await pollStatus();
+});
+
+$("stop").onclick = () => busy($("stop"), "Stopping…", async () => {
+  await api("/api/clear", {});
+  say("Stopped. Your phone is back to its real location.", "ok");
+  await pollStatus();
+});
+
+$("quit").onclick = async () => {
+  if (!confirm("Restore your real location and quit?")) return;
+  try { await api("/api/quit", {}); } catch {}
+  document.body.innerHTML = '<div style="padding:40px">Location Spoofer has quit. Your phone is back to its real location. You can close this tab.</div>';
+};
+$("refresh").onclick = loadDevices;
+$("device").onchange = () => { renderDeviceInfo(); updateButtons(); };
+
+async function pollStatus() {
+  try { state.status = await api("/api/status"); } catch { return; }
+  const s = state.status;
+  let text = "Not spoofing", cls = "";
+  if (s.mode === "static") text = "Spoofing: holding position";
+  if (s.mode === "walking") text = `Spoofing: moving${s.walk_remaining_s != null ? ` (~${Math.ceil(s.walk_remaining_s / 60)} min left)` : ""}`;
+  if (s.error) { text += " · connection problem"; cls = "bad"; say(s.error, "bad"); }
+  $("status").textContent = text; $("status").className = cls;
+  if (s.location) spoofMarker.setLatLng(s.location).addTo(map); else spoofMarker.remove();
+  updateButtons();
+}
+
+renderFavs();
+loadDevices();
+pollStatus();
+setInterval(pollStatus, 2000);
+setInterval(loadDevices, 15000);
+</script>
+</body>
+</html>

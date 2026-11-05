@@ -1,0 +1,57 @@
+# Builds the Mac app and Windows exe and attaches them to a GitHub Release.
+# Trigger: push a tag like v0.1.0  (git tag v0.1.0 && git push origin v0.1.0)
+# or run it by hand from the Actions tab (artifacts only, no release).
+name: build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            asset: LocationSpoofer-mac.zip
+          - os: windows-latest
+            asset: LocationSpoofer-windows.zip
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements-build.txt
+
+      - name: Build
+        run: pyinstaller --noconfirm spoofer.spec
+
+      - name: Zip (macOS)
+        if: runner.os == 'macOS'
+        # ditto keeps the .app bundle's symlinks and permissions intact
+        run: ditto -c -k --keepParent dist/LocationSpoofer.app ${{ matrix.asset }}
+
+      - name: Zip (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist/LocationSpoofer -DestinationPath ${{ matrix.asset }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.asset }}

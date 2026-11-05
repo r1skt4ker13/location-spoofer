@@ -4,42 +4,40 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A local job-search assistant. It scrapes intern-list.com, filters postings by category, location, degree level, GPA/transcript requirements and duplicates, then scores the survivors against `resume/resume.pdf` with Claude. There is no per-job tailoring: the same resume is used for every application, served at `/api/resume`. It does **not** submit applications. The user applies by hand from the dashboard and marks each job applied or skipped.
+A local Mac/Windows app that sets a USB- or Wi-Fi-connected iPhone's location to a point picked on a map, so Find My shows that point. It drives Apple's developer location-simulation service through [pymobiledevice3](https://github.com/doronz88/pymobiledevice3).
+
+The `main` branch holds an unrelated older project (a job-search agent). This app lives on `feature-location-spoofer`.
 
 ## Commands
 
-All commands run from `backend/` with the venv active (`source .venv/bin/activate`).
-
 ```bash
-pip install -r requirements.txt && playwright install chromium   # setup
-uvicorn app.main:app --port 8787                                  # run server + scheduler + dashboard at http://localhost:8787
-python -c "from app.pipeline import run_pipeline; print(run_pipeline())"   # one pipeline run without the server
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt          # runtime deps (exact pins)
+python -m spoofer                        # run: local server on 127.0.0.1:8765 (or a free port), opens the browser
+pip install -r requirements-build.txt && pyinstaller --noconfirm spoofer.spec   # package for this OS -> dist/
 ```
 
-There is no test suite, linter or build step. The filters in `app/filters.py` are pure functions, so you can check them directly with `python -c`.
+There is no test suite. Pure helpers like `_interpolate` in `spoofer/device.py` can be checked with `python -c`. Releases are built by `.github/workflows/build.yml` when a `v*` tag is pushed (macOS + Windows). A Mac can't build the Windows exe, so that build only happens in CI.
 
 ## Architecture
 
-- **`app/main.py`:** FastAPI app.
-  - Its lifespan runs `init_db()` (schema plus additive migrations) and re-filters existing rows.
-  - It also starts an APScheduler `BackgroundScheduler` that calls `pipeline.run_pipeline` every `SCRAPE_INTERVAL_HOURS` (default 4), starting with a run at startup.
-  - The pipeline runs on a background thread because Playwright's sync API can't run on the asyncio loop.
-  - It serves `frontend/index.html`, a single-file vanilla-JS dashboard.
-- **`app/pipeline.py`:** `run_pipeline()` holds a non-blocking lock so the scheduler and the "Run now" button can't overlap. Each stage reads and writes job rows by `status`:
-  - `new` → `filtered` (fails a filter, so no Claude call)
-  - or `new` → `ready` when `fit_score >= FIT_THRESHOLD`, otherwise `scored`
-  - The user then moves a ready job to `applied` or `skipped`.
-  - A new job with the same normalized company + title as an existing row is inserted as `filtered` ("duplicate of …"). Together with the id-based known-id check, this prevents re-applying.
-  - Claude can also move a job to `filtered` while scoring (see the flags below).
-- **Sources** (`SOURCES` in `app/config.py`, dispatched by `scraper.scrape_all`):
-  - **`ml_ai`:** intern-list's ML/AI list is an embedded Airtable view that only fills in through JavaScript and only draws the rows on screen. `app/scraper.py` renders it in headless Chromium, scrolls, and collects rows by `data-rowid`. It maps columns by `data-columnindex` through `COLUMN_MAP`, which breaks if the Airtable view's columns are reordered. These job ids are the raw Airtable rowids, with no prefix.
-  - **`pm`, `data_analysis`:** these lists are server-rendered Webflow pages, scraped by `app/webflow_scraper.py` with stdlib `urllib`. Cards (`div.w-dyn-item`) give the title, company and date. Location, qualifications and the apply link only appear on each job's detail page, which is fetched only for unseen ids. These job ids are `<source>:<numeric id>`.
-  - Every source is sorted newest first. A scrape stops after 25 consecutive already-known ids.
-- **`app/filters.py`:** the deterministic filters. A location passes if it is in the Bay Area, the NYC metro (all of NJ counts) or remote. A title fails if it contains research, PhD, Master's or MBA keywords. A title or qualifications text fails if it mentions GPA or transcript.
-- **`app/claude_client.py`:**
-  - Scoring calls `claude-haiku-5-5`.
-  - It forces a tool call (`tool_choice`) to get structured output.
-  - The scoring tool also returns `requires_graduate_degree`, `is_research_role` and `asks_for_gpa_or_transcript`. Any of these being true moves the job to `filtered`.
-- **`app/db.py`:** SQLite at `data/jobs.db`. Add schema changes as idempotent `ALTER TABLE ... ADD COLUMN` entries in `MIGRATIONS` (applied by `init_db`), because existing databases must keep working.
+- **`spoofer/device.py`:** all phone communication.
+  - **iOS 17+ tunnel:** the location service is reached through `UserspaceRsdTunnel`, pymobiledevice3's in-process tunnel, which needs no root or admin. It's then opened as `DvtProvider` → `LocationSimulation`.
+  - **One event-loop thread:** the userspace tunnel is a **process-global singleton and isn't thread-safe**. So `DeviceManager` runs every device coroutine on one dedicated event-loop thread, and sync callers go through `DeviceManager.run()`. Only one phone can be spoofed at a time.
+  - **Session stays open:** the simulated location lasts only while the DVT connection stays open, so the session is kept open. A keepalive task re-sends the point every 20 s and reconnects if the connection dropped, for example a Wi-Fi blip.
+  - **`prepare()`:** one-time setup. It checks trust, Developer Mode (and reveals the toggle in Settings via AMFI), Wi-Fi connections, and the developer disk image, mounted with `auto_mount` over the tunnel.
+  - **Errors:** library exceptions are turned into user-readable messages by `_friendly()`, raised as `SpooferError`, and returned as HTTP 400s.
+- **`spoofer/server.py`:**
+  - A FastAPI app bound to **127.0.0.1 only**, so nothing on the network can drive the phone.
+  - It serves `spoofer/web/index.html` and a small JSON API: devices, prepare, location, walk, clear, status, quit.
+  - Under PyInstaller, `_web_dir()` resolves the web folder through `sys._MEIPASS`.
+- **`spoofer/web/index.html`:** a single-file UI.
+  - Leaflet is pinned from cdnjs. Map tiles come from OSM, with attribution required.
+  - Search uses Nominatim, throttled to ≤1 request/s per its usage policy.
+  - Favorites are kept in localStorage.
+- **`spoofer/__main__.py`:**
+  - Picks a port and opens the browser.
+  - Registers `manager.shutdown()` with atexit, so quitting always restores the real location. The `/api/quit` endpoint does the same thing, because the packaged Mac `.app` has no terminal.
+- **`spoofer.spec`:** pymobiledevice3 imports its modules lazily, and the tunnel needs the `pmd_*` network-stack packages, so the spec bundles all of them with `collect_all`. Add a package there if the packaged app fails with a `ModuleNotFoundError` the source run doesn't have.
 
-Config comes from `backend/.env` (see `.env.example`): `ANTHROPIC_API_KEY`, `SCRAPE_INTERVAL_HOURS`, `FIT_THRESHOLD`, `MAX_SCRAPE_ROWS`, `PORT`, `AIRTABLE_EMBED_URL`.
+Pin new dependency versions exactly. pymobiledevice3 releases almost daily, so pick one that's at least two weeks old.
